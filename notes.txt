@@ -1,0 +1,7 @@
+FTP Program will allow a client to connect to a web server and send or receive files to/from the server
+
+- Client to Server connection will be similar to the chat_program
+- Might not need to startup the server, will most likely just need socket:IP_addr pair
+- Socket is given by FTP, depends on what kind of action we want to do
+- Could use localhost as my server, don't know how I'd hold the files though
+
