@@ -12,17 +12,22 @@
 #include<grp.h>
 #include<pwd.h>
 #include<time.h>
+#include<errno.h>
 
-#define PORT 21
+#define PORT 20
 #define MAX 4096
 #define ERROR -1
 #define MAX_IP 255
 #define MAX_IP_LEN 15
 
+//void trim(char* input)
+//{
+//  int n = strlen(
+//}
+
 char* get_home_dir(void) {
   struct passwd *pwd;
   pwd = getpwuid(getuid());
-
   return pwd->pw_dir;
 }
 
@@ -51,7 +56,51 @@ int ip_validation(char* ip_addr) {
   return 0;
 }
 
-void transfer(int serv_sock) {
+void get_instr(char* instr, char* ret)
+{
+  int idx = 0;
+  char c = instr[idx];
+  while (c != ' ' && c != '\n' && c != '\t' && c != '\r'
+	 && c != '\0') // look for whitespace
+  {
+    ret[idx] = c;
+    c = instr[++idx];
+  }
+  printf("%s\n", instr);
+}
+
+void reverse(char* str, int len)
+{
+  int end = len - 1;
+  for (int i = 0; i < (len / 2); i++)
+  {
+    char temp = str[i];
+    str[i] = str[end];
+    str[end--] = temp;
+  }
+}
+
+void get_filename_from_path(char* path, char* filename)
+{
+  // path == "/xxx/xxx/xxx/name"
+  // get /name
+  // start from strlen(path) and read chars into filename until
+  // a '/' is encountered
+  printf("Starting filepath: %s\n\n\n", path);
+  int length = strlen(path) - 1, idx = 0;
+  char c = path[length--];
+  while (c != '/')
+  {
+    filename[idx++] = c;
+    c = path[length--];
+  }
+  filename[idx++] = c;
+  filename[idx] = '.';
+  reverse(filename, strlen(filename)); // chars were copied in reversed
+  printf("Filename: %s\n", filename);
+}
+
+void put(int serv_sock) {
 
   // init vars
   char buf[MAX];
@@ -101,72 +150,55 @@ void transfer(int serv_sock) {
 
 }
 
-void receive(int serv_sock)
+void get(int serv_sock, char* command)
 {
   // init vars
-  char buf[MAX];
+  char buf[MAX], filename[MAX];
+  char* filepath = malloc(MAX);
   char* pwd = malloc(MAX);
   pwd = get_home_dir();
-
   FILE* out;
-
-  int bytes;
+  int data_size;
   
-  while (1) {
-
-    bzero(buf, MAX);
-    bytes = 0;
-    // while we have a connection, transfer files
-    // provide a filepath (could change later with a directory GUI)
-    // input will be printed but also loaded into a FILE* that will be opened
-    // and read to the server. server could potentially open its own file
-    // and add to it as it gets data (read func)
-    printf("\n%s: \n\tEnter filepath to be transferred (or exit): ", pwd);
-    fgets(buf, MAX, stdin);
-
-    if (!strcmp(buf, "exit")) {
-      printf("Exiting back to main...\n");
-      break; // break out of loop and choose t,r, or e
-    }
-
-    // get filename from buffer
-    // initial alg: parse string and count how many '/''s there are
-    // parse the buffer again and get the string after the last '/'
-
-    // TODO: TEST THIS ALGORITHM
-    // just a brute force for now
-    // could do in one loop where I go until I reach null char and then
-    // walk backwards until I reach a '/' char
-
-    // could also start at buf[strlen(buf) - 1] and go until I reach a '/', then walk
-    // back the other way, adding each char to filename
-    int idx = (strlen(buf) - 1), count = 0, fwd_bwd = 0;
-    char* filename;
-    bzero(filename, strlen(buf));
-    while (count >= 0)
-    {
-      if (buf[idx--] == '/') {
-	fwd_bwd = 1;
-	realloc(filename, (count + 1));
-      } else if (!fwd_bwd)
-	count++;
-      else
-      {
-	filename[idx] = buf[idx];
-	count--;
-	idx++;
-      }
-    }
-    
-    out = fopen(filename, "w+");
-
-    if (out == NULL)
-    {
-      printf("File could not be created. Please try again.\n");
-      continue;
-    }
-    
+  // need to tell server what command and arg was input
+  // command: get /xxx/xxx/name
+  if ((write(serv_sock, command, strlen(command))) == -1)
+  {
+    printf("Error writing to server...\n");
+    return;
   }
+
+  // move string past "get "
+  // now looking at path
+  // TODO: more args could be used
+  // could have a memory leak here
+  strcpy(filepath, command+4);
+
+  bzero(filename, MAX);
+  get_filename_from_path(filepath, filename);
+  
+  out = fopen(filename, "w+");
+  if (out == NULL)
+  {
+    printf("Error creating file in client directory. Exiting...\n");
+    return;
+  }
+
+  // Try to read server data stream into out file
+  // If read fails or has certain string, an error occurred
+  while ((data_size = read(serv_sock, buf, MAX)) != -1) // TODO
+  {
+    // done/error
+    if (fputs(buf, out) < 0)
+    {
+      fclose(out);
+      free(command), free(pwd);
+      return;
+    }
+  }
+
+  fclose(out);
+  free(command), free(pwd);
 }
 
 int main(int argc, char* argv[]) {
@@ -213,33 +245,77 @@ int main(int argc, char* argv[]) {
   // socket has been written to. need to attempt connection to server
   if (connect(sockfd, (struct sockaddr*)&server, sizeof(server)) == -1)
   {
-    printf("Couldn't connect to server. Exiting now...\n");
+    printf("Couldn't connect to server. Exiting now...\nErrorno: %d\n", errno);
     exit(1);
   }
 
-  // connected to server by this point. can call function that deals with FTP shenanigans
-  // could have two functions inside of a while loop with a prompt beforehand asking
-  // what kind of FTP functions it wants to use.
-  // It can either a) transfer to server or b) get files from server
-  // i.e. transfer(serv_sock) & receive(serv_sock)
-  // one writes then receives a response; the other sends a file to get and reads data
-  // into a fd
-  printf("Connected!\n\nWould you like to (t)ransfer a file, (r)eceive a file, or (e)xit?: ");
-  char command = getchar();
-  while (command != 'e' || command != 'E')
-  {
-    if (command != 't' || command != 'T' || command != 'r' || command != 'R')
-    {
-      printf("\nError: please enter a 't' for transfers, 'r' for receiving, or 'e' for exiting.\n");
-      command = getchar();
-      continue;
-    }
-    else if (command == 't' || command == 'T')
-      transfer(sockfd);
-  //else
-  //  receive(sockfd);
-  }
+  // TODO: Before I do this if statement I can do authentication (add later)
   
+  // Big if statement below that deals with different cmd line instructions
+  // mkdir: create new directory on server
+  // cd: change directory
+  // rm: remove file from server
+  // get: receive file from server
+  // put: send file to server
+  // ls: list directory contents
+
+  // TODO: add arguments later on
+
+  // Print working directory for each new line
+  // Call functions given the instruction (could be a switch statement)
+  char* instr;
+  char* pwd;
+  char buf[10]; // used to hold instructions. relatively small strings so 10 bytes is used
+
+  pwd = malloc(MAX);
+  instr = malloc(MAX);
+  
+  strcpy(pwd, get_home_dir());
+  
+  while (1)
+  {
+    
+    bzero(instr, MAX);
+    bzero(buf, 10);
+    
+    pwd = (char*) realloc(pwd, strlen(pwd) + 1);
+    printf("%s$ ", pwd);
+    
+    // skips over second time around
+    // EDIT: changed to fgets
+    fgets(instr, MAX, stdin);
+    instr[strlen(instr)-1] = '\0';
+    
+    // get instruction (every char before a space)
+    get_instr(instr, buf);
+
+    if (!strcmp(buf, "cd")) 
+      // cd(sockfd);
+      continue;
+    else if (!strcmp(buf, "mkdir"))
+      // mkdir(sockfd);
+      continue;
+    else if (!strcmp(buf, "rm"))
+      // rm(sockfd);
+      continue;
+    else if (!strcmp(buf, "get")) {
+      if (strlen(instr) <= 4) {
+	printf("Must enter a filepath when using get.\n");
+	continue;
+      }
+      get(sockfd, instr);
+    } else if (!strcmp(buf, "put"))
+      put(sockfd);
+    else if (!strcmp(buf, "ls"))
+      // ls(sockfd);
+      continue;
+    else {
+      printf("Error in getting new instr\n");
+      exit(1);
+    }
+      
+    
+  }
   
   return 0;
   
